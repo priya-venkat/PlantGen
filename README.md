@@ -1,7 +1,8 @@
 # PlantGen
 ## Codes for RNA Seq Analaysis
 
-Functions in R language for RNA Seq Analysis of Solanum Lycopersicum (Tomato) \s\s
+Functions in R language for RNA Seq Analysis of Solanum Lycopersicum (Tomato) 
+
 In particular, 
 * Differential Expression Analysis - DeSeq2
 * Gene Annotation
