@@ -1,0 +1,169 @@
+###### Gene set enrichment using Modified Enrichment Browser
+
+######## Part1:  Get Summarized Experiment from summarizeOverlaps,then perform DeSeq2
+
+# source("http://bioconductor.org/biocLite.R")
+# biocLite("DESeq2")
+# source("http://bioconductor.org/biocLite.R")
+# biocLite("GenomicAlignments")
+
+dir1 <- ("/Users/priya/Documents/PLANT_RNA_SEQ/tophat_dmel/vg_1")
+csvfile1 <- file.path(dir1,"samptab1.csv")
+sampleTable1 <- read.csv(csvfile1,row.names=1)
+
+dir2 <- ("/Users/priya/Documents/PLANT_RNA_SEQ/All_bam")
+# Get all aligned bam files
+filenames1 <- file.path(dir2, paste0(sampleTable1$Run, ".bam"))
+
+library("Rsamtools")
+bamfiles1 <- BamFileList(filenames1, yieldSize=2000000)
+seqinfo(bamfiles1[1])
+
+library("GenomicFeatures")
+gtffile1 <- file.path(dir1,"ITAG2.4_gene_models.gff3") # ITAG2.3 correspn to SL2.4, ITAG2.4 to SL2.5
+txdb1 <- makeTxDbFromGFF(gtffile1, format="gff3")
+genes1 <- transcriptsBy(txdb1, by="gene")  # use exonsBy or transcriptsBy
+
+library("GenomicAlignments")
+se1 <- summarizeOverlaps(features=genes1, reads=bamfiles1,
+                         mode="Union",
+                         ignore.strand=TRUE )
+se2<-se1
+#saveRDS(se1, file="/Users/priya/Documents/PLANT_RNA_SEQ/All_bam/se1_summExp_properGeneNames.rds")
+write.csv(assay(se1),file="/Users/priya/Documents/PLANT_RNA_SEQ/All_bam/SummarizedExp_All_Mar24_geneNames.csv")
+
+#Viewing results
+head(assay(se1))
+colSums(assay(se1))
+
+rowRanges(se1)
+str(metadata(rowRanges(se1)))
+
+colData(se1)
+colData(se1) <- DataFrame(sampleTable1)
+colData(se1)
+
+########     DESeq2   ##############
+# Differential Expression Analysis
+se1$cell
+se1$dex
+
+library("DESeq2")
+dds1 <- DESeqDataSet(se1, design = ~ cell + dex + cell:dex)   #### DESeq vignette pg 24 set, condition
+dds1$dex <- relevel(dds1$dex, "control")
+dds1 <- DESeq(dds1)
+
+# comparison of control vs psyllid at 50ml
+(res1 <- results(dds1, name="cell50ml.dexpsyllid", cooksCutoff=FALSE, independentFiltering = FALSE))
+
+################# Part 2: Enrichment using Enrichment Browser
+
+# Sly#
+expr1 <-assays(se1)[[1]]
+expr1 <- expr1[grep("^Soly", rownames(expr1)),]
+expr1 <- expr1[rowMeans(expr1) > 10,]
+sly.eset <- new("ExpressionSet", exprs=expr1, annotation="sly")
+dim(sly.eset)
+exprs(sly.eset)[1:4,1:4]   
+###########################
+library(EDASeq)
+ids1 <- head(featureNames(sly.eset))
+#lgc1 <- EDASeq::getGeneLengthAndGCContent(ids1, org="sly", mode="biomart")
+# Using precomputed information, normalization within and between lanes can be carried out via
+#data.dir <- system.file("extdata", package="EnrichmentBrowser")
+#lgc.file <- file.path(data.dir, "air_lgc.tab")
+#fData(air.eset) <-read.delim(lgc.file)
+#norm.air <- normalize(air.eset, within=TRUE)
+
+############## differential exp............ 50 ml vs 200ml group
+# Group defines the groups between which diff expression is calculated!! so need to modify accordingly
+pData(sly.eset)$GROUP <- ifelse(colData(se1)$cell == "50ml", 1, 0)    # se1 replaced dds1 march 29
+table(pData(sly.eset)$GROUP)
+
+pData(sly.eset)$BLOCK <- colData(se1)$dex
+table(pData(sly.eset)$BLOCK)
+
+# enrichmentbrowser...............
+
+library(EnrichmentBrowser)
+library(limma)
+library(KEGGREST)
+#sly.eset1 <- de.ana(sly.eset, de.method="DESeq") 
+sly.eset1 <- de.ana(sly.eset, de.method="edgeR")  # can do Deseq too
+head(fData(sly.eset1), n=4)
+
+# Visulaization of diff exp
+par(mfrow=c(1,2))
+pdistr(fData(sly.eset1)$ADJ.PVAL)
+volcano(fData(sly.eset1)$FC, fData(sly.eset1)$ADJ.PVAL)
+fData(sly.eset1)[ which.min(fData(sly.eset1)$ADJ.PVAL), ]
+# Solyc04g007630.1 heavy metal transport/metal ion binding protein
+#id.types("hsa")
+head(featureNames(sly.eset1))
+
+####march 25
+# Annotation: adding gene names...
+library("AnnotationDbi")
+
+# install.packages("devtools")
+# library(devtools)
+# source("https://bioconductor.org/biocLite.R")
+# biocLite("BiocInstaller")
+# install_github("afukushima/org.Slycopersicum.eg.db")
+# install_github("afukushima/org.Slycopersicum.kozo.db")
+# install_github("afukushima/TxDb.Slycopersicum.itag2.4.genemodels")
+# install_github("kozo2/tomatoGeneChip.db")
+# biocLite("GO.db")
+# install_github("afukushima/Solanum.lycopersicum")
+
+library("Solanum.lycopersicum")
+tom <- Solanum.lycopersicum
+gsly <- featureNames(sly.eset1)
+geneid2itagsly <- mapIds(tom, keys=gsly, column="ITAG", keytype="GENEID")
+inter1<- as.data.frame(geneid2itagsly)
+intersly<-as.vector(inter1$geneid2itagsly)
+#write.table(geneid2itag, file="/Users/priya/Documents/PLANT_RNA_SEQ/Annotate/geneid2itag",col.names=FALSE)
+itag2entrezsly <- mapIds(tom, keys=intersly, column="ENTREZID", keytype="ITAG")
+
+fname<-as.character(itag2entrezsly)
+# need to remove NA's and duplicates from entrez ids of featureNames
+idx1<-which(is.na(fname))
+fname1 <- fname[-idx1]
+idx2<-which(duplicated(fname1))
+#subsetting expression set
+sly.eset3 <-sly.eset1[-idx1]
+sly.eset3 <-sly.eset3[-idx2]
+fname2 <- fname1[-idx2]
+
+#write.table(itag2entrezsly, file="/Users/priya/Documents/PLANT_RNA_SEQ/Annotate/itag2entrezsly",col.names=FALSE)
+featureNames(sly.eset3) <- fname2
+head(featureNames(sly.eset3))  #check if they are entrez ids
+
+# get kegg gene sets for enrichment. 
+#    No go gene sets for Soly, and gmt file has gene ids that can't be used with sbea 
+kegg1.gs <- get.kegg.genesets("sly", gmt.file=NULL)
+length(kegg1.gs)
+kegg1.gs[1:2]
+#go1.gs <- get.go.genesets(org="sly", onto="MF", mode="biomart")
+#User-defined gene sets can be parsed from the GMT file format
+#gmt.file <- "/Users/priya/Documents/PLANT_RNA_SEQ/Annotate/gene_set_Go_terms.gmt"
+#sly.gs <- parse.genesets.from.GMT(gmt.file)
+#length(sly.gs)
+#sly.gs[1:2]
+
+# # gene name changing to numeric
+# namo <- featureNames(sly.eset1)
+# newnamo<-seq(100001,117673,1)
+# sly.eset2 <- sly.eset1
+# featureNames(sly.eset2) <- newnamo
+# head(featureNames(sly.eset2))
+
+sbea.methods()   # can use ora, gsea, safe, samgs
+sbea.res_50vs200 <- sbea(method="ora", eset=sly.eset3, gs=kegg1.gs, perm=0, alpha=0.05)
+#saveRDS(sbea.res1, file="/Users/priya/Documents/PLANT_RNA_SEQ/Enrichment/ora_sly_res1.rds")
+#saveRDS(sbea.res1, file="/Users/priya/Documents/PLANT_RNA_SEQ/Enrichment/ora_sly_DESeq_res1.rds")
+#sbea.res2 <- sbea(method="gsea", eset=sly.eset3, gs=sly.gs, perm=0, alpha=0.05)
+#write(sbea.res1, file="/Users/priya/Documents/PLANT_RNA_SEQ/Enrichment/ora_sly_res1")
+enri<-gs.ranking(sbea.res_50vs200)
+write.table(enri, file="/Users/priya/Documents/PLANT_RNA_SEQ/Enrichment/Ranked_KEGGgeneSets_50vs200_edgeR",quote=FALSE,sep="\t")
+ea.browse_try(sbea.res_50vs200)
